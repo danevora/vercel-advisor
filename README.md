@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Vercel Advisor
 
-## Getting Started
+Paste a public GitHub URL → get a streaming deployment readiness report for
+Next.js on Vercel. Built as a Solutions Architect take-home assessment.
 
-First, run the development server:
+## What it checks
+- **Rendering**: SSR/SSG/ISR fit, missing Suspense boundaries, PPR opportunities
+- **Edge compatibility**: Node-only APIs in middleware or edge routes
+- **Caching**: missing `revalidate`, fetch calls without cache config
+- **Bundle**: heavy client packages, missing `next/dynamic`
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+## Architecture (one screen)
+
+```
+Browser ─submit URL─▶ /api/analyze (Fluid Compute, maxDuration=120)
+                      └─ streamText + tools ──▶ GitHub API
+                         (getFileTree, readFile, recordCheck, finalize)
+                      └─ on finish ──▶ Vercel Blob (reports/<id>.json)
+                      ◀── UI message stream (text deltas, tool calls, data parts)
+
+Browser ─/report/[id]─▶ PPR page (static shell from edge + Suspense Blob read)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Stack
+- Next.js 16 (App Router, PPR)
+- AI SDK 6 (`streamText`, `tool`, UI message stream) with Vercel AI Gateway
+- Vercel Blob for shareable reports
+- Vercel Fluid Compute for long-running tool-call loops
+- Zod for structured agent output
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Run locally
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+cp .env.local.example .env.local   # add at least one model API key
+npm install
+npm run dev
+```
 
-## Learn More
+Open http://localhost:3000.
 
-To learn more about Next.js, take a look at the following resources:
+## Evals
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+curl -X POST http://localhost:3000/api/evals \
+  -H 'content-type: application/json' \
+  -d '{"fixtureId":"shadcn-ui"}'
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+See [src/lib/evals/fixtures.ts](src/lib/evals/fixtures.ts) for the test set
+and [src/lib/evals/score.ts](src/lib/evals/score.ts) for the rubric.
 
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Interview prep
+See [notes/README.md](notes/README.md). Notes auto-update on every commit
+via a Claude Code `PostToolUse` hook in [.claude/settings.json](.claude/settings.json).
