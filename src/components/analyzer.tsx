@@ -33,14 +33,12 @@ function isToolPart(
 
 export function Analyzer() {
   const [url, setUrl] = useState('');
-  const [submitted, setSubmitted] = useState<string | null>(null);
   const router = useRouter();
 
+  // Transport just points at our route. The server reads the repoUrl from
+  // the user message text — no closure-captured React state to go stale.
   const { messages, sendMessage, status, error } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/analyze',
-      prepareSendMessagesRequest: () => ({ body: { repoUrl: submitted } }),
-    }),
+    transport: new DefaultChatTransport({ api: '/api/analyze' }),
   });
 
   const parts = messages.flatMap((m) => m.parts as AnyPart[]);
@@ -73,7 +71,6 @@ export function Analyzer() {
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!url.trim() || status === 'streaming' || status === 'submitted') return;
-    setSubmitted(url.trim());
     sendMessage({ text: url.trim() });
   }
 

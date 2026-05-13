@@ -23,9 +23,27 @@ export const maxDuration = 120;
 
 const MODEL_ID = process.env.ADVISOR_MODEL ?? 'openai/gpt-4o-mini';
 
+// Accept either the standard useChat shape (`{ messages: [...] }`) or a
+// direct `{ repoUrl }` body for curl/eval testing. Extract the URL from
+// whichever is present.
+type UIMessageLike = {
+  role: string;
+  parts?: Array<{ type: string; text?: string }>;
+  content?: string;
+};
+
+function extractRepoUrl(body: { messages?: UIMessageLike[]; repoUrl?: string }): string | null {
+  if (body.repoUrl) return body.repoUrl;
+  const last = body.messages?.[body.messages.length - 1];
+  if (!last) return null;
+  const fromParts = last.parts?.find((p) => p.type === 'text')?.text;
+  return (fromParts ?? last.content ?? null)?.trim() || null;
+}
+
 export async function POST(req: Request) {
-  const body = (await req.json()) as { repoUrl?: string };
-  if (!body.repoUrl) {
+  const body = (await req.json()) as { messages?: UIMessageLike[]; repoUrl?: string };
+  const repoUrl = extractRepoUrl(body);
+  if (!repoUrl) {
     return new Response(JSON.stringify({ error: 'repoUrl required' }), {
       status: 400,
       headers: { 'content-type': 'application/json' },
@@ -35,7 +53,7 @@ export async function POST(req: Request) {
   let owner: string;
   let repo: string;
   try {
-    ({ owner, repo } = parseGitHubUrl(body.repoUrl));
+    ({ owner, repo } = parseGitHubUrl(repoUrl));
   } catch (e) {
     return new Response(
       JSON.stringify({ error: (e as Error).message }),
@@ -73,7 +91,7 @@ export async function POST(req: Request) {
       const result = streamText({
         model: MODEL_ID,
         system: ANALYZE_SYSTEM_PROMPT,
-        prompt: `Analyze the GitHub repository at ${body.repoUrl}.\nOwner: ${owner}\nRepo: ${repo}\nDefault branch: ${branch}\n\nWhen done, call \`finalize\` with the executive summary.`,
+        prompt: `Analyze the GitHub repository at ${repoUrl}.\nOwner: ${owner}\nRepo: ${repo}\nDefault branch: ${branch}\n\nWhen done, call \`finalize\` with the executive summary.`,
         // stepCountIs bounds the tool-call loop. 12 = ~1 tree + ~6-8 file reads
         // + ~4-6 recordCheck calls + finalize. Prevents runaway costs.
         stopWhen: stepCountIs(15),
@@ -156,7 +174,7 @@ export async function POST(req: Request) {
       const id = nanoid(10);
       const report: Report = {
         id,
-        repoUrl: body.repoUrl!,
+        repoUrl,
         owner,
         repo,
         defaultBranch: branch,
