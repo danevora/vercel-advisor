@@ -160,7 +160,15 @@ export function Analyzer() {
       {checks.length > 0 ? (
         <div className="mt-6 grid gap-3">
           {checks.map((c, i) => (
-            <CheckCard key={i} check={c} />
+            <CheckCard
+              key={i}
+              check={c}
+              repo={
+                meta
+                  ? { owner: meta.owner, repo: meta.repo, branch: meta.branch }
+                  : undefined
+              }
+            />
           ))}
         </div>
       ) : null}

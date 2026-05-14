@@ -1,4 +1,5 @@
 import type { Check } from '@/lib/schemas';
+import { buildBlobUrl } from '@/lib/github';
 
 const STATUS_STYLES: Record<Check['status'], string> = {
   pass: 'border-emerald-500/40 bg-emerald-500/5 text-emerald-300',
@@ -19,7 +20,15 @@ const CATEGORY_LABEL: Record<Check['category'], string> = {
   bundle: 'Bundle',
 };
 
-export function CheckCard({ check }: { check: Check }) {
+export type RepoContext = { owner: string; repo: string; branch: string };
+
+export function CheckCard({
+  check,
+  repo,
+}: {
+  check: Check;
+  repo?: RepoContext;
+}) {
   return (
     <article className={`rounded-lg border p-4 ${STATUS_STYLES[check.status]}`}>
       <header className="flex items-center justify-between gap-3">
@@ -38,15 +47,34 @@ export function CheckCard({ check }: { check: Check }) {
       ) : null}
       {check.fileReferences && check.fileReferences.length > 0 ? (
         <ul className="mt-3 flex flex-wrap gap-2">
-          {check.fileReferences.map((ref, i) => (
-            <li
-              key={i}
-              className="rounded bg-black/30 px-2 py-1 font-mono text-xs text-zinc-300"
-            >
-              {ref.path}
-              {ref.line != null ? `:${ref.line}` : ''}
-            </li>
-          ))}
+          {check.fileReferences.map((ref, i) => {
+            const label = `${ref.path}${ref.line != null ? `:${ref.line}` : ''}`;
+            const href = repo
+              ? buildBlobUrl(repo.owner, repo.repo, repo.branch, ref.path, ref.line)
+              : null;
+            return (
+              <li key={i}>
+                {href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={ref.excerpt ?? undefined}
+                    className="inline-block rounded bg-black/30 px-2 py-1 font-mono text-xs text-zinc-300 underline-offset-2 hover:bg-black/50 hover:text-zinc-100 hover:underline"
+                  >
+                    {label} ↗
+                  </a>
+                ) : (
+                  <span
+                    title={ref.excerpt ?? undefined}
+                    className="inline-block rounded bg-black/30 px-2 py-1 font-mono text-xs text-zinc-300"
+                  >
+                    {label}
+                  </span>
+                )}
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </article>

@@ -79,6 +79,31 @@ export async function POST(req: Request) {
   const collectedChecks: Check[] = [];
   let summary = '';
 
+  // The agent has a tendency to hallucinate file paths and to flag framework
+  // dependencies (react, next) as bundle issues. We use the tool layer as a
+  // guardrail: track what was actually seen/read, then validate every
+  // recordCheck against that ground truth. Invalid checks are rejected with
+  // a structured error so the model can self-correct on the next step.
+  const filesInTree = new Set<string>();
+  const filesRead = new Set<string>();
+  const rejectedCheckCount = { value: 0 };
+
+  // Findings in the "bundle" category are noisy unless they call out a
+  // specific anti-pattern. Framework packages and standard dev tooling are
+  // not "bundle issues" — they are required.
+  const FRAMEWORK_DEPS = new Set([
+    'react',
+    'react-dom',
+    'next',
+    'typescript',
+    'tailwindcss',
+    '@types/react',
+    '@types/react-dom',
+    '@types/node',
+    'eslint',
+    'eslint-config-next',
+  ]);
+
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       // Emit early so the client can render context while the model warms up.
@@ -114,6 +139,9 @@ export async function POST(req: Request) {
                 )
                 .slice(0, 200)
                 .map((e) => e.path);
+              // Remember what the agent has seen so we can validate file
+              // references in recordCheck later.
+              for (const p of filtered) filesInTree.add(p);
               return { files: filtered, totalFiles: tree.length };
             },
           }),
@@ -128,6 +156,7 @@ export async function POST(req: Request) {
             execute: async ({ path }) => {
               try {
                 const content = await getFileContent(owner, repo, path, branch);
+                filesRead.add(path);
                 return { path, content };
               } catch (err) {
                 return { path, error: (err as Error).message };
@@ -136,9 +165,44 @@ export async function POST(req: Request) {
           }),
           recordCheck: tool({
             description:
-              'Record one finding from your analysis. Call once per finding. Each call is shown to the user in real time.',
+              'Record one finding from your analysis. Call once per finding. Each call is shown to the user in real time. The server WILL reject findings that cite files you have not read, or that flag framework dependencies as bundle issues.',
             inputSchema: CheckSchema,
             execute: async (input) => {
+              // 1. Reject hallucinated file references.
+              const badRefs =
+                input.fileReferences?.filter(
+                  (r) => !filesInTree.has(r.path) && !filesRead.has(r.path),
+                ) ?? [];
+              if (badRefs.length > 0) {
+                rejectedCheckCount.value += 1;
+                return {
+                  recorded: false,
+                  error: `REJECTED: file reference(s) not found in the repository tree: ${badRefs
+                    .map((r) => r.path)
+                    .join(
+                      ', ',
+                    )}. Only cite files returned by getFileTree or readFile. Either call readFile to verify, or remove the fileReferences and resubmit.`,
+                };
+              }
+
+              // 2. Reject "framework dep is bloat" findings.
+              if (input.category === 'bundle') {
+                const haystack = `${input.name} ${input.explanation} ${input.recommendation ?? ''}`.toLowerCase();
+                const flaggedFramework = [...FRAMEWORK_DEPS].find((dep) => {
+                  // Match the dep as a whole word (avoid false positives like
+                  // "react-router" matching "react").
+                  const re = new RegExp(`(^|[^a-z0-9@/-])${dep.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}([^a-z0-9-]|$)`, 'i');
+                  return re.test(haystack);
+                });
+                if (flaggedFramework) {
+                  rejectedCheckCount.value += 1;
+                  return {
+                    recorded: false,
+                    error: `REJECTED: this finding flags "${flaggedFramework}" as a bundle issue. Framework dependencies are required and should NOT be flagged. Real bundle issues are things like full lodash/moment imports, missing next/dynamic on heavy components, or oversized client components. Either rewrite the finding to cite a real anti-pattern, or skip it.`,
+                  };
+                }
+              }
+
               collectedChecks.push(input);
               writer.write({
                 type: 'data-check',

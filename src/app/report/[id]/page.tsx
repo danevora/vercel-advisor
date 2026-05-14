@@ -100,7 +100,19 @@ async function ReportContent({ id }: { id: string }) {
             </h2>
             <div className="grid gap-3">
               {group.checks.map((c, i) => (
-                <CheckCard key={i} check={c} />
+                <CheckCard
+                  key={i}
+                  check={c}
+                  repo={
+                    report.defaultBranch
+                      ? {
+                          owner: report.owner,
+                          repo: report.repo,
+                          branch: report.defaultBranch,
+                        }
+                      : undefined
+                  }
+                />
               ))}
             </div>
           </section>

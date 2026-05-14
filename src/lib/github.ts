@@ -65,5 +65,21 @@ export async function getFileContent(
   const decoded = Buffer.from(data.content, 'base64').toString('utf-8');
   // Cap file size returned to the model — long files burn tokens with no benefit.
   const MAX = 12_000;
-  return decoded.length > MAX ? `${decoded.slice(0, MAX)}\n\n[...truncated]` : decoded;
+  const capped = decoded.length > MAX ? `${decoded.slice(0, MAX)}\n[truncated]` : decoded;
+  // Prepend line numbers so the model can cite them confidently in findings.
+  return capped
+    .split('\n')
+    .map((line, i) => `${String(i + 1).padStart(4, ' ')}  ${line}`)
+    .join('\n');
+}
+
+export function buildBlobUrl(
+  owner: string,
+  repo: string,
+  branch: string,
+  path: string,
+  line?: number,
+): string {
+  const base = `https://github.com/${owner}/${repo}/blob/${branch}/${path}`;
+  return line ? `${base}#L${line}` : base;
 }
