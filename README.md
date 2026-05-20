@@ -48,7 +48,3 @@ curl -X POST http://localhost:3000/api/evals \
 
 See [src/lib/evals/fixtures.ts](src/lib/evals/fixtures.ts) for the test set
 and [src/lib/evals/score.ts](src/lib/evals/score.ts) for the rubric.
-
-## Interview prep
-See [notes/README.md](notes/README.md). Notes auto-update on every commit
-via a Claude Code `PostToolUse` hook in [.claude/settings.json](.claude/settings.json).
