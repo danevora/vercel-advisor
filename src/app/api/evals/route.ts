@@ -6,18 +6,17 @@ import { CheckSchema, type Check } from '@/lib/schemas';
 import { ANALYZE_SYSTEM_PROMPT } from '@/lib/prompts';
 import { FIXTURES } from '@/lib/evals/fixtures';
 import { scoreFixture, type EvalResult } from '@/lib/evals/score';
+import { DEFAULT_MODEL_ID, isValidModel } from '@/lib/models';
 
 export const maxDuration = 300;
 
-const MODEL_ID = process.env.ADVISOR_MODEL ?? 'openai/gpt-4o-mini';
-
-async function runAgentForRepo(repoUrl: string): Promise<Check[]> {
+async function runAgentForRepo(repoUrl: string, modelId: string): Promise<Check[]> {
   const { owner, repo } = parseGitHubUrl(repoUrl);
   const { defaultBranch: branch } = await getRepoMeta(owner, repo);
   const collected: Check[] = [];
 
   await generateText({
-    model: MODEL_ID,
+    model: modelId,
     system: ANALYZE_SYSTEM_PROMPT,
     prompt: `Analyze ${repoUrl}. Owner: ${owner}, Repo: ${repo}, Branch: ${branch}. When done, call finalize.`,
     stopWhen: stepCountIs(15),
@@ -76,7 +75,13 @@ async function runAgentForRepo(repoUrl: string): Promise<Check[]> {
  * cheaper, and we don't need throughput here.
  */
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { fixtureId?: string };
+  const body = (await req.json().catch(() => ({}))) as { fixtureId?: string; modelId?: string };
+
+  const requestedModel = body.modelId;
+  const MODEL_ID =
+    requestedModel && isValidModel(requestedModel)
+      ? requestedModel
+      : (process.env.ADVISOR_MODEL ?? DEFAULT_MODEL_ID);
 
   const targets = body.fixtureId
     ? FIXTURES.filter((f) => f.id === body.fixtureId)
@@ -90,7 +95,7 @@ export async function POST(req: Request) {
 
   for (const fx of targets) {
     try {
-      const checks = await runAgentForRepo(fx.repoUrl);
+      const checks = await runAgentForRepo(fx.repoUrl, MODEL_ID);
       results.push(scoreFixture(fx, checks));
     } catch (err) {
       results.push({

@@ -12,6 +12,7 @@ import { getRepoMeta, getFileTree, getFileContent } from '@/lib/github';
 import { saveReport } from '@/lib/blob';
 import { CheckSchema, type Check, type Report } from '@/lib/schemas';
 import { ANALYZE_SYSTEM_PROMPT } from '@/lib/prompts';
+import { DEFAULT_MODEL_ID, isValidModel } from '@/lib/models';
 
 /**
  * Fluid Compute config. This route does multiple sequential GitHub fetches
@@ -20,8 +21,6 @@ import { ANALYZE_SYSTEM_PROMPT } from '@/lib/prompts';
  * active CPU, not the time spent awaiting upstream APIs.
  */
 export const maxDuration = 120;
-
-const MODEL_ID = process.env.ADVISOR_MODEL ?? 'openai/gpt-4o-mini';
 
 // Accept either the standard useChat shape (`{ messages: [...] }`) or a
 // direct `{ repoUrl }` body for curl/eval testing. Extract the URL from
@@ -41,7 +40,12 @@ function extractRepoUrl(body: { messages?: UIMessageLike[]; repoUrl?: string }):
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as { messages?: UIMessageLike[]; repoUrl?: string };
+  const body = (await req.json()) as { messages?: UIMessageLike[]; repoUrl?: string; modelId?: string };
+  const requestedModel = body.modelId;
+  const MODEL_ID =
+    requestedModel && isValidModel(requestedModel)
+      ? requestedModel
+      : (process.env.ADVISOR_MODEL ?? DEFAULT_MODEL_ID);
   const repoUrl = extractRepoUrl(body);
   if (!repoUrl) {
     return new Response(JSON.stringify({ error: 'repoUrl required' }), {

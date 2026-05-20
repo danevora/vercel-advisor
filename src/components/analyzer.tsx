@@ -1,11 +1,12 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { useRouter } from 'next/navigation';
 import { CheckCard } from './check-card';
 import type { Check } from '@/lib/schemas';
+import { AVAILABLE_MODELS, DEFAULT_MODEL_ID } from '@/lib/models';
 
 const EXAMPLES = [
   'https://github.com/vercel/next.js',
@@ -17,8 +18,6 @@ type RepoMeta = { owner: string; repo: string; branch: string; modelId: string }
 type SavedRef = { id: string; url: string };
 type SaveErr = { error: string };
 
-// Narrow helpers — AI SDK's UIMessagePart is a wide discriminated union.
-// These keep the JSX readable while satisfying the type checker.
 type AnyPart = { type: string } & Record<string, unknown>;
 
 function isDataPart<T>(p: AnyPart, name: string): p is AnyPart & { data: T } {
@@ -33,12 +32,25 @@ function isToolPart(
 
 export function Analyzer() {
   const [url, setUrl] = useState('');
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_ID);
+  const selectedModelRef = useRef(selectedModel);
   const router = useRouter();
 
-  // Transport just points at our route. The server reads the repoUrl from
-  // the user message text — no closure-captured React state to go stale.
+  useEffect(() => {
+    selectedModelRef.current = selectedModel;
+  }, [selectedModel]);
+
   const { messages, sendMessage, status, error } = useChat({
-    transport: new DefaultChatTransport({ api: '/api/analyze' }),
+    transport: new DefaultChatTransport({
+      api: '/api/analyze',
+      fetch: (input, init) => {
+        const body = JSON.parse((init?.body as string) ?? '{}');
+        return window.fetch(input, {
+          ...init,
+          body: JSON.stringify({ ...body, modelId: selectedModelRef.current }),
+        });
+      },
+    }),
   });
 
   const parts = messages.flatMap((m) => m.parts as AnyPart[]);
@@ -101,6 +113,26 @@ export function Analyzer() {
             {isRunning ? 'Analyzing…' : 'Analyze'}
           </button>
         </div>
+
+        <div className="flex items-center gap-3">
+          <label className="text-xs text-zinc-500" htmlFor="model">
+            Model
+          </label>
+          <select
+            id="model"
+            value={selectedModel}
+            onChange={(e) => setSelectedModel(e.target.value)}
+            disabled={isRunning}
+            className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 font-mono text-xs text-zinc-300 focus:border-zinc-500 focus:outline-none disabled:opacity-50"
+          >
+            {AVAILABLE_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.provider} · {m.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
         {!isRunning && checks.length === 0 ? (
           <div className="flex flex-wrap gap-2 text-xs text-zinc-500">
             <span>Try:</span>
