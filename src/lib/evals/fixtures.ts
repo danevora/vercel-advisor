@@ -14,6 +14,9 @@ import type { CheckCategory } from '@/lib/schemas';
  * need to be production-grade for the assessment.
  */
 
+// Set to true to inject a guaranteed-fail finding and demo regression detection.
+const REGRESSION_MODE = false;
+
 export type ExpectedFinding = {
   category: CheckCategory;
   keyword: string; // case-insensitive substring match
@@ -75,50 +78,10 @@ export const FIXTURES: Fixture[] = [
     ],
   },
   {
-    id: 'papermark',
-    repoUrl: 'https://github.com/papermark/papermark',
-    description:
-      'Open-source DocSend alternative. Ships a rich-text editor and analytics charts that eagerly load heavy packages with no next/dynamic splits.',
-    expectedFindings: [
-      {
-        category: 'bundle',
-        keyword: 'tiptap',
-        reason:
-          'components/ui/rich-text-editor.tsx is a "use client" component that statically imports @tiptap/react, @tiptap/starter-kit, and three tiptap extensions — no next/dynamic wrapper.',
-      },
-      {
-        category: 'bundle',
-        keyword: 'motion',
-        reason:
-          'components/view/visitor-graph.tsx and components/ui/bar-list.tsx both import `motion` (the framer-motion v12 successor, a large animation runtime) directly at the top level with no dynamic import boundary.',
-      },
-    ],
-  },
-  {
-    id: 'inbox-zero',
-    repoUrl: 'https://github.com/elie222/inbox-zero',
-    description:
-      'Open-source AI email assistant. The stats dashboard eagerly loads recharts and the full CJS lodash package into a "use client" component.',
-    expectedFindings: [
-      {
-        category: 'bundle',
-        keyword: 'recharts',
-        reason:
-          'apps/web/app/(app)/[emailAccountId]/stats/RuleStatsChart.tsx declares "use client" and imports PieChart, Pie, LabelList from recharts directly — no next/dynamic split.',
-      },
-      {
-        category: 'bundle',
-        keyword: 'lodash',
-        reason:
-          'RuleStatsChart.tsx imports `fromPairs` from the full CJS `lodash` package (not lodash/fromPairs or lodash-es) inside a "use client" component, pulling the entire ~70kb library into the client bundle.',
-      },
-    ],
-  },
-  {
     id: 'ai-chatbot',
     repoUrl: 'https://github.com/vercel/ai-chatbot',
     description:
-      'Reference AI app — assumed mostly clean (no fail-level findings), but a few heavy editors ship to the client without next/dynamic and the chat UI has a wide "use client" boundary.',
+      'Reference AI app — assumed mostly clean (no fail-level findings), but several heavy editors and the artifact panel ship large client deps with no next/dynamic boundaries.',
     expectedFindings: [
       {
         category: 'bundle',
@@ -133,11 +96,33 @@ export const FIXTURES: Fixture[] = [
           'components/chat/text-editor.tsx pulls in 8 prosemirror-* packages statically inside a "use client" component, with no next/dynamic split.',
       },
       {
+        category: 'bundle',
+        keyword: 'framer-motion',
+        reason:
+          'components/chat/artifact.tsx imports AnimatePresence and motion directly from framer-motion (~150kb animation runtime) with no next/dynamic wrapper.',
+      },
+      {
+        category: 'bundle',
+        keyword: 'react-data-grid',
+        reason:
+          'components/chat/sheet-editor.tsx declares "use client" and imports DataGrid from react-data-grid plus papaparse directly — the full CSV editor ships on every chat page load.',
+      },
+      {
         category: 'rendering',
         keyword: 'client',
         reason:
           'Nearly every file under components/chat/ (shell, sidebar, multimodal-input, editors, artifact-actions) begins with "use client" — the chat surface could push more of its tree to server components.',
       },
+      ...(REGRESSION_MODE
+        ? [
+            {
+              category: 'bundle' as CheckCategory,
+              keyword: '__regression_demo_nonexistent_lib__',
+              reason:
+                'REGRESSION_MODE sentinel: this keyword can never match a real finding, so it guarantees this fixture fails.',
+            },
+          ]
+        : []),
     ],
     expectClean: true,
   },
