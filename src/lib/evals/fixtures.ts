@@ -75,6 +75,46 @@ export const FIXTURES: Fixture[] = [
     ],
   },
   {
+    id: 'papermark',
+    repoUrl: 'https://github.com/papermark/papermark',
+    description:
+      'Open-source DocSend alternative. Ships a rich-text editor and analytics charts that eagerly load heavy packages with no next/dynamic splits.',
+    expectedFindings: [
+      {
+        category: 'bundle',
+        keyword: 'tiptap',
+        reason:
+          'components/ui/rich-text-editor.tsx is a "use client" component that statically imports @tiptap/react, @tiptap/starter-kit, and three tiptap extensions — no next/dynamic wrapper.',
+      },
+      {
+        category: 'bundle',
+        keyword: 'motion',
+        reason:
+          'components/view/visitor-graph.tsx and components/ui/bar-list.tsx both import `motion` (the framer-motion v12 successor, a large animation runtime) directly at the top level with no dynamic import boundary.',
+      },
+    ],
+  },
+  {
+    id: 'inbox-zero',
+    repoUrl: 'https://github.com/elie222/inbox-zero',
+    description:
+      'Open-source AI email assistant. The stats dashboard eagerly loads recharts and the full CJS lodash package into a "use client" component.',
+    expectedFindings: [
+      {
+        category: 'bundle',
+        keyword: 'recharts',
+        reason:
+          'apps/web/app/(app)/[emailAccountId]/stats/RuleStatsChart.tsx declares "use client" and imports PieChart, Pie, LabelList from recharts directly — no next/dynamic split.',
+      },
+      {
+        category: 'bundle',
+        keyword: 'lodash',
+        reason:
+          'RuleStatsChart.tsx imports `fromPairs` from the full CJS `lodash` package (not lodash/fromPairs or lodash-es) inside a "use client" component, pulling the entire ~70kb library into the client bundle.',
+      },
+    ],
+  },
+  {
     id: 'ai-chatbot',
     repoUrl: 'https://github.com/vercel/ai-chatbot',
     description:
