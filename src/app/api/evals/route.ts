@@ -1,9 +1,8 @@
-import { generateText, tool, stepCountIs } from 'ai';
-import { z } from 'zod';
+import { generateText, stepCountIs } from 'ai';
 import { parseGitHubUrl } from '@/lib/parse-url';
-import { getRepoMeta, getFileTree, getFileContent } from '@/lib/github';
-import { CheckSchema, type Check } from '@/lib/schemas';
-import { ANALYZE_SYSTEM_PROMPT } from '@/lib/prompts';
+import { getRepoMeta } from '@/lib/github';
+import { type Check } from '@/lib/schemas';
+import { buildAnalysisTools, ANALYZE_SYSTEM_PROMPT, AGENT_PROMPT, AGENT_STEP_LIMIT } from '@/lib/agent';
 import { FIXTURES } from '@/lib/evals/fixtures';
 import { scoreFixture, type EvalResult } from '@/lib/evals/score';
 import { DEFAULT_MODEL_ID, isValidModel } from '@/lib/models';
@@ -13,60 +12,18 @@ export const maxDuration = 300;
 async function runAgentForRepo(repoUrl: string, modelId: string): Promise<Check[]> {
   const { owner, repo } = parseGitHubUrl(repoUrl);
   const { defaultBranch: branch } = await getRepoMeta(owner, repo);
-  const collected: Check[] = [];
+
+  const agent = buildAnalysisTools({ owner, repo, branch });
 
   await generateText({
     model: modelId,
     system: ANALYZE_SYSTEM_PROMPT,
-    prompt: `Analyze ${repoUrl}. Owner: ${owner}, Repo: ${repo}, Branch: ${branch}. When done, call finalize.`,
-    stopWhen: stepCountIs(15),
-    tools: {
-      getFileTree: tool({
-        description: 'List files in the repo.',
-        inputSchema: z.object({}),
-        execute: async () => {
-          const tree = await getFileTree(owner, repo, branch);
-          return {
-            files: tree
-              .filter((e) => e.type === 'blob')
-              .filter((e) =>
-                /\.(t|j)sx?$|^next\.config\.|^package\.json$|^middleware\.|^vercel\.json$/.test(
-                  e.path,
-                ),
-              )
-              .slice(0, 200)
-              .map((e) => e.path),
-          };
-        },
-      }),
-      readFile: tool({
-        description: 'Read a file.',
-        inputSchema: z.object({ path: z.string() }),
-        execute: async ({ path }) => {
-          try {
-            return { path, content: await getFileContent(owner, repo, path, branch) };
-          } catch (err) {
-            return { path, error: (err as Error).message };
-          }
-        },
-      }),
-      recordCheck: tool({
-        description: 'Record one finding.',
-        inputSchema: CheckSchema,
-        execute: async (input) => {
-          collected.push(input);
-          return { recorded: true };
-        },
-      }),
-      finalize: tool({
-        description: 'Finish.',
-        inputSchema: z.object({ summary: z.string() }),
-        execute: async () => ({ done: true }),
-      }),
-    },
+    prompt: AGENT_PROMPT(repoUrl, owner, repo, branch),
+    stopWhen: stepCountIs(AGENT_STEP_LIMIT),
+    tools: agent.tools,
   });
 
-  return collected;
+  return agent.checks;
 }
 
 /**

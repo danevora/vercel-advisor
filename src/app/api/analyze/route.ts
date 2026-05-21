@@ -1,17 +1,15 @@
 import {
   streamText,
-  tool,
   stepCountIs,
   createUIMessageStream,
   createUIMessageStreamResponse,
 } from 'ai';
-import { z } from 'zod';
 import { nanoid } from 'nanoid';
 import { parseGitHubUrl } from '@/lib/parse-url';
-import { getRepoMeta, getFileTree, getFileContent } from '@/lib/github';
+import { getRepoMeta } from '@/lib/github';
 import { saveReport } from '@/lib/blob';
-import { CheckSchema, type Check, type Report } from '@/lib/schemas';
-import { ANALYZE_SYSTEM_PROMPT } from '@/lib/prompts';
+import { type Report } from '@/lib/schemas';
+import { buildAnalysisTools, ANALYZE_SYSTEM_PROMPT, AGENT_PROMPT, AGENT_STEP_LIMIT } from '@/lib/agent';
 import { DEFAULT_MODEL_ID, isValidModel } from '@/lib/models';
 
 /**
@@ -78,36 +76,6 @@ export async function POST(req: Request) {
   }
   const branch = meta.defaultBranch;
 
-  // Collected by tool.execute calls inside the streamText loop, then
-  // persisted to Blob once the stream completes.
-  const collectedChecks: Check[] = [];
-  let summary = '';
-
-  // The agent has a tendency to hallucinate file paths and to flag framework
-  // dependencies (react, next) as bundle issues. We use the tool layer as a
-  // guardrail: track what was actually seen/read, then validate every
-  // recordCheck against that ground truth. Invalid checks are rejected with
-  // a structured error so the model can self-correct on the next step.
-  const filesInTree = new Set<string>();
-  const filesRead = new Set<string>();
-  const rejectedCheckCount = { value: 0 };
-
-  // Findings in the "bundle" category are noisy unless they call out a
-  // specific anti-pattern. Framework packages and standard dev tooling are
-  // not "bundle issues" — they are required.
-  const FRAMEWORK_DEPS = new Set([
-    'react',
-    'react-dom',
-    'next',
-    'typescript',
-    'tailwindcss',
-    '@types/react',
-    '@types/react-dom',
-    '@types/node',
-    'eslint',
-    'eslint-config-next',
-  ]);
-
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
       // Emit early so the client can render context while the model warms up.
@@ -117,117 +85,25 @@ export async function POST(req: Request) {
         data: { owner, repo, branch, modelId: MODEL_ID },
       });
 
+      const agent = buildAnalysisTools({
+        owner,
+        repo,
+        branch,
+        onCheck: (check, count) => {
+          writer.write({
+            type: 'data-check',
+            id: `check-${count}`,
+            data: check,
+          });
+        },
+      });
+
       const result = streamText({
         model: MODEL_ID,
         system: ANALYZE_SYSTEM_PROMPT,
-        prompt: `Analyze the GitHub repository at ${repoUrl}.\nOwner: ${owner}\nRepo: ${repo}\nDefault branch: ${branch}\n\nWhen done, call \`finalize\` with the executive summary.`,
-        // stepCountIs bounds the tool-call loop. 12 = ~1 tree + ~6-8 file reads
-        // + ~4-6 recordCheck calls + finalize. Prevents runaway costs.
-        stopWhen: stepCountIs(15),
-        tools: {
-          getFileTree: tool({
-            description:
-              'List files and directories in the repository. Call this once at the start to plan which files to read.',
-            inputSchema: z.object({}),
-            execute: async () => {
-              const tree = await getFileTree(owner, repo, branch);
-              // Filter to source-relevant paths to keep the model focused
-              // (and the prompt cheap).
-              const filtered = tree
-                .filter((e) => e.type === 'blob')
-                .filter(
-                  (e) =>
-                    /\.(t|j)sx?$|^next\.config\.|^package\.json$|^middleware\.|\.mdx?$|^vercel\.json$/.test(
-                      e.path,
-                    ),
-                )
-                .slice(0, 200)
-                .map((e) => e.path);
-              // Remember what the agent has seen so we can validate file
-              // references in recordCheck later.
-              for (const p of filtered) filesInTree.add(p);
-              return { files: filtered, totalFiles: tree.length };
-            },
-          }),
-          readFile: tool({
-            description:
-              'Read the contents of a specific file in the repository. Use sparingly — only request files likely to contain config or routing logic.',
-            inputSchema: z.object({
-              path: z
-                .string()
-                .describe('Repo-relative file path returned by getFileTree.'),
-            }),
-            execute: async ({ path }) => {
-              try {
-                const content = await getFileContent(owner, repo, path, branch);
-                filesRead.add(path);
-                return { path, content };
-              } catch (err) {
-                return { path, error: (err as Error).message };
-              }
-            },
-          }),
-          recordCheck: tool({
-            description:
-              'Record one finding from your analysis. Call once per finding. Each call is shown to the user in real time. The server WILL reject findings that cite files you have not read, or that flag framework dependencies as bundle issues.',
-            inputSchema: CheckSchema,
-            execute: async (input) => {
-              // 1. Reject hallucinated file references.
-              const badRefs =
-                input.fileReferences?.filter(
-                  (r) => !filesInTree.has(r.path) && !filesRead.has(r.path),
-                ) ?? [];
-              if (badRefs.length > 0) {
-                rejectedCheckCount.value += 1;
-                return {
-                  recorded: false,
-                  error: `REJECTED: file reference(s) not found in the repository tree: ${badRefs
-                    .map((r) => r.path)
-                    .join(
-                      ', ',
-                    )}. Only cite files returned by getFileTree or readFile. Either call readFile to verify, or remove the fileReferences and resubmit.`,
-                };
-              }
-
-              // 2. Reject "framework dep is bloat" findings.
-              if (input.category === 'bundle') {
-                const haystack = `${input.name} ${input.explanation} ${input.recommendation ?? ''}`.toLowerCase();
-                const flaggedFramework = [...FRAMEWORK_DEPS].find((dep) => {
-                  // Match the dep as a whole word (avoid false positives like
-                  // "react-router" matching "react").
-                  const re = new RegExp(`(^|[^a-z0-9@/-])${dep.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}([^a-z0-9-]|$)`, 'i');
-                  return re.test(haystack);
-                });
-                if (flaggedFramework) {
-                  rejectedCheckCount.value += 1;
-                  return {
-                    recorded: false,
-                    error: `REJECTED: this finding flags "${flaggedFramework}" as a bundle issue. Framework dependencies are required and should NOT be flagged. Real bundle issues are things like full lodash/moment imports, missing next/dynamic on heavy components, or oversized client components. Either rewrite the finding to cite a real anti-pattern, or skip it.`,
-                  };
-                }
-              }
-
-              collectedChecks.push(input);
-              writer.write({
-                type: 'data-check',
-                id: `check-${collectedChecks.length}`,
-                data: input,
-              });
-              return { recorded: true, count: collectedChecks.length };
-            },
-          }),
-          finalize: tool({
-            description:
-              'Call exactly once when analysis is complete with a non-engineer-readable executive summary (2-4 sentences).',
-            inputSchema: z.object({
-              summary: z.string(),
-            }),
-            execute: async ({ summary: s }) => {
-              summary = s;
-              return { done: true };
-            },
-          }),
-        },
+        prompt: AGENT_PROMPT(repoUrl, owner, repo, branch),
+        stopWhen: stepCountIs(AGENT_STEP_LIMIT),
+        tools: agent.tools,
         onError: ({ error }) => {
           console.error('streamText error', error);
         },
@@ -246,10 +122,10 @@ export async function POST(req: Request) {
         owner,
         repo,
         defaultBranch: branch,
-        checks: collectedChecks,
+        checks: agent.checks,
         summary:
-          summary ||
-          `Analyzed ${collectedChecks.length} checks against ${owner}/${repo}.`,
+          agent.summary ||
+          `Analyzed ${agent.checks.length} checks against ${owner}/${repo}.`,
         createdAt: new Date().toISOString(),
         modelId: MODEL_ID,
       };
